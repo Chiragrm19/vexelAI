@@ -1,0 +1,106 @@
+version: '3.9'
+
+services:
+  # ─────────────────────────────────────────────
+  # PostgreSQL Database
+  # ─────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: tokenvault_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: tokenvault
+      POSTGRES_USER: tokenvault
+      POSTGRES_PASSWORD: tokenvault_secret
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U tokenvault']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─────────────────────────────────────────────
+  # Redis (quota enforcement + session cache)
+  # ─────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: tokenvault_redis
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ─────────────────────────────────────────────
+  # NestJS Backend API
+  # ─────────────────────────────────────────────
+  api:
+    build:
+      context: ./backend/api
+      dockerfile: Dockerfile
+    container_name: tokenvault_api
+    restart: unless-stopped
+    ports:
+      - '3001:3001'
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://tokenvault:tokenvault_secret@postgres:5432/tokenvault
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:-supersecret_jwt_key_change_in_prod}
+      JWT_EXPIRES_IN: 7d
+      PORT: 3001
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ─────────────────────────────────────────────
+  # Go AI Gateway Proxy
+  # ─────────────────────────────────────────────
+  gateway:
+    build:
+      context: ./backend/gateway
+      dockerfile: Dockerfile
+    container_name: tokenvault_gateway
+    restart: unless-stopped
+    ports:
+      - '8080:8080'
+    environment:
+      PORT: 8080
+      REDIS_URL: redis://redis:6379
+      API_URL: http://api:3001
+      JWT_SECRET: ${JWT_SECRET:-supersecret_jwt_key_change_in_prod}
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # ─────────────────────────────────────────────
+  # Next.js Frontend
+  # ─────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: tokenvault_frontend
+    restart: unless-stopped
+    ports:
+      - '3000:3000'
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:3001
+      NEXT_PUBLIC_GATEWAY_URL: http://localhost:8080
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
+  redis_data:

@@ -1,0 +1,154 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────
+// Teams (one per company/organization)
+// ─────────────────────────────────────────────────────
+model Team {
+  id        String   @id @default(uuid())
+  companyId String   @unique @map("company_id") // e.g., COMP-7X9K2M
+  name      String
+  adminId   String?  @map("admin_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  admin     User?      @relation("TeamAdmin", fields: [adminId], references: [id])
+  members   User[]     @relation("TeamMembers")
+  providers Provider[]
+  quotas    Quota[]
+
+  @@map("teams")
+}
+
+// ─────────────────────────────────────────────────────
+// Users (admins + employees)
+// ─────────────────────────────────────────────────────
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  phone        String   @unique
+  passwordHash String   @map("password_hash")
+  role         UserRole @default(EMPLOYEE)
+  jobRole      String   @default("SDE") @map("job_role") // SDE, PM, Designer, etc.
+  teamId       String?  @map("team_id")
+  isVerified   Boolean  @default(false) @map("is_verified")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  team        Team?      @relation("TeamMembers", fields: [teamId], references: [id])
+  adminOfTeam Team[]     @relation("TeamAdmin")
+  quota       Quota?
+  usageLogs   UsageLog[]
+  otpCodes    OtpCode[]
+
+  @@map("users")
+}
+
+enum UserRole {
+  ADMIN
+  EMPLOYEE
+}
+
+// ─────────────────────────────────────────────────────
+// AI Providers (Claude, GPT, Cohere, etc.)
+// ─────────────────────────────────────────────────────
+model Provider {
+  id                   String  @id @default(uuid())
+  teamId               String  @map("team_id")
+  name                 String // Claude, GPT-4, etc.
+  apiKeyEncrypted      String  @map("api_key_encrypted")
+  monthlyTokensAllowed BigInt  @map("monthly_tokens_allowed") // e.g., 500_000_000
+  costPerMillionTokens Float   @map("cost_per_million_tokens") // e.g., 3.00
+  isActive             Boolean @default(true) @map("is_active")
+  createdAt            DateTime @default(now()) @map("created_at")
+
+  team      Team       @relation(fields: [teamId], references: [id])
+  usageLogs UsageLog[]
+
+  @@map("providers")
+}
+
+// ─────────────────────────────────────────────────────
+// Token Quotas (one per user)
+// ─────────────────────────────────────────────────────
+model Quota {
+  id                   String   @id @default(uuid())
+  userId               String   @unique @map("user_id")
+  teamId               String   @map("team_id")
+  tokensAllocated      BigInt   @default(0) @map("tokens_allocated")
+  tokensUsed           BigInt   @default(0) @map("tokens_used")
+  hardLimit            Boolean  @default(true) @map("hard_limit")
+  softLimitThreshold   Int      @default(80) @map("soft_limit_threshold") // warn at 80%
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id])
+  team Team @relation(fields: [teamId], references: [id])
+
+  @@map("quotas")
+}
+
+// ─────────────────────────────────────────────────────
+// Usage Logs (one per AI request)
+// ─────────────────────────────────────────────────────
+model UsageLog {
+  id                   String   @id @default(uuid())
+  userId               String   @map("user_id")
+  providerId           String   @map("provider_id")
+  promptTokens         Int      @map("prompt_tokens")
+  responseTokens       Int      @map("response_tokens")
+  totalTokens          Int      @map("total_tokens")
+  originalPromptTokens Int?     @map("original_prompt_tokens") // Before compression
+  cached               Boolean  @default(false) // Cache hit?
+  compressed           Boolean  @default(false)
+  modelUsed            String   @map("model_used") // e.g., claude-3.5-sonnet
+  costUsd              Float    @map("cost_usd")
+  taskType             String?  @map("task_type") // code, qa, analysis
+  timestamp            DateTime @default(now())
+
+  user     User     @relation(fields: [userId], references: [id])
+  provider Provider @relation(fields: [providerId], references: [id])
+
+  @@map("usage_logs")
+}
+
+// ─────────────────────────────────────────────────────
+// OTP Codes (phone + email verification)
+// ─────────────────────────────────────────────────────
+model OtpCode {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  code      String   // 6-digit OTP
+  type      OtpType
+  expiresAt DateTime @map("expires_at")
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("otp_codes")
+}
+
+enum OtpType {
+  PHONE
+  EMAIL
+}
+
+// ─────────────────────────────────────────────────────
+// Audit Logs (compliance)
+// ─────────────────────────────────────────────────────
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  teamId    String   @map("team_id")
+  action    String   // e.g., QUOTA_UPDATED, MEMBER_INVITED
+  details   Json?
+  ipAddress String?  @map("ip_address")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("audit_logs")
+}
